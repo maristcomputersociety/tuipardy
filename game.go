@@ -27,6 +27,12 @@ type Game struct {
 	lastCell       [2]int
 	imageRenderer  *ImageRenderer
 	imageSupported bool
+	textToRender   string // text content to render via stdout
+	textStyle      tcell.Style
+	textAreaX      int
+	textAreaY      int
+	textAreaW      int
+	textAreaH      int
 }
 
 func NewGame(b *Board) *Game {
@@ -39,8 +45,8 @@ func NewGame(b *Board) *Game {
 	return &Game{
 		board:          b,
 		phase:          PhaseSetupNumTeams,
-		minTeams:       2,
-		maxTeams:       8,
+		minTeams:       MinTeams,
+		maxTeams:       MaxTeams,
 		imageRenderer:  imageRenderer,
 		imageSupported: imageSupported,
 	}
@@ -224,7 +230,7 @@ func (g *Game) handleQuestionKey(key tcell.Key, r rune) bool {
 
 func (g *Game) move(dc, dr int) {
 	cols := len(g.board.Categories)
-	rows := 5
+	rows := QuestionsPerCategory
 	g.cursorCol = (g.cursorCol + dc + cols) % cols
 	g.cursorRow = (g.cursorRow + dr + rows) % rows
 }
@@ -243,25 +249,31 @@ func (g *Game) openSelected() {
 	g.msg = "press space/enter to reveal answer, esc to return."
 }
 
+// Regex for score commands: <teamNum><+|-><value>
 var scoreCmdRe = regexp.MustCompile(`^([1-8])([\+\-])(\d+)$`)
 
+// applyScoreCommand parses and applies score adjustment
 func applyScoreCommand(g *Game, buf string) bool {
 	m := scoreCmdRe.FindStringSubmatch(buf)
 	if m == nil {
 		return false
 	}
+
 	idx, _ := strconv.Atoi(m[1])
 	sign := m[2]
 	val, _ := strconv.Atoi(m[3])
+
 	teamIdx := idx - 1
 	if teamIdx < 0 || teamIdx >= len(g.teams) {
 		return false
 	}
+
 	if sign == "+" {
 		g.teams[teamIdx].Score += val
 	} else {
 		g.teams[teamIdx].Score -= val
 	}
+
 	g.flashMsg("adjusted %s: %c%d", g.teams[teamIdx].Name, sign[0], val)
 	return true
 }
@@ -270,6 +282,7 @@ func (g *Game) flashMsg(format string, args ...any) {
 	g.msg = fmt.Sprintf(format, args...)
 }
 
+// renderImageAfterShow renders image using Kitty protocol
 func (g *Game) renderImageAfterShow() {
 	if g.imageRenderer == nil || g.curQ == nil || g.curQ.ImagePath == "" {
 		return
@@ -277,18 +290,60 @@ func (g *Game) renderImageAfterShow() {
 
 	w, h := g.s.Size()
 	questionAreaY := QuestionAreaY
-	questionAreaH := h - questionAreaY - 3
-	imageWidth := w / 2
+	questionAreaH := h - questionAreaY - StatusBarHeight
+	imageHeight := questionAreaH * ImageHeightRatio / 100
 
-	centerX := imageWidth / 4
-	centerY := questionAreaH / 4
-	finalX := centerX + 2
-	finalY := questionAreaY + centerY + 2
+	// define the image area boundaries
+	imageAreaY := questionAreaY
+	imageAreaHeight := imageHeight
+	imageAreaWidth := w - 4 // leave some padding on sides
+
+	// calculate the midpoint of the designated image area
+	areaMidX := w / 2
+	areaMidY := imageAreaY + imageAreaHeight/2
+
+	imgWidth, imgHeight, err := g.imageRenderer.GetImageBounds(g.curQ.ImagePath)
+	if err != nil {
+		return
+	}
+
+	estimatedCellWidth := imgWidth / 10
+	estimatedCellHeight := imgHeight / 20
+
+	// if estimated size exceeds the available area, scale down proportionally
+	if estimatedCellWidth > imageAreaWidth {
+		scale := float64(imageAreaWidth) / float64(estimatedCellWidth)
+		estimatedCellWidth = imageAreaWidth
+		estimatedCellHeight = int(float64(estimatedCellHeight) * scale)
+	}
+	if estimatedCellHeight > imageAreaHeight {
+		scale := float64(imageAreaHeight) / float64(estimatedCellHeight)
+		estimatedCellHeight = imageAreaHeight
+		estimatedCellWidth = int(float64(estimatedCellWidth) * scale)
+	}
+
+	// calculate cursor position to center the image's midpoint on the area's midpoint
+	cursorX := areaMidX - (estimatedCellWidth / 2)
+	cursorY := areaMidY - (estimatedCellHeight / 2)
+
+	if cursorX < 2 {
+		cursorX = 2
+	}
+	if cursorY < imageAreaY {
+		cursorY = imageAreaY
+	}
+	if cursorX+estimatedCellWidth > w-2 { // ensure image doesn't go off right edge
+		cursorX = w - 2 - estimatedCellWidth
+	}
+	if cursorY+estimatedCellHeight > imageAreaY+imageAreaHeight { // ensure image doesn't go off bottom
+		cursorY = imageAreaY + imageAreaHeight - estimatedCellHeight
+	}
 
 	fmt.Printf("\x1b[s")
-	fmt.Printf("\x1b[%d;%dH", finalY, finalX)
+	fmt.Printf("\x1b[%d;%dH", cursorY, cursorX)
 
-	if imageData, err := g.imageRenderer.RenderImageToString(g.curQ.ImagePath, 0, 0); err == nil && imageData != "" {
+	imageData, err := g.imageRenderer.RenderImageToString(g.curQ.ImagePath, 0, 0)
+	if err == nil && imageData != "" {
 		fmt.Print(imageData)
 	}
 
@@ -301,4 +356,57 @@ func (g *Game) clearImage() {
 	}
 
 	fmt.Print("\x1b_Ga=d\x1b\\")
+}
+
+// renderTextAfterShow renders text using Kitty protocol
+func (g *Game) renderTextAfterShow() {
+	if g.textToRender == "" {
+		return
+	}
+
+	maxLineWidth := g.textAreaW/2 - 4
+	lines := wrapText(g.textToRender, maxLineWidth)
+
+	lineSpacing := 2
+	startY := g.textAreaY + (g.textAreaH-len(lines)*lineSpacing)/2
+	if startY < g.textAreaY {
+		startY = g.textAreaY
+	}
+
+	fmt.Printf("\x1b[s")
+
+	// to stdout
+	for i, textLine := range lines {
+		lineY := startY + i*lineSpacing
+		if lineY >= g.textAreaY+g.textAreaH {
+			break
+		}
+
+		scaledTextWidth := len(textLine) * 2
+		cx := g.textAreaX + g.textAreaW/2 - scaledTextWidth/2
+		if cx < g.textAreaX {
+			cx = g.textAreaX
+		}
+
+		fmt.Printf("\x1b[%d;%dH", lineY, cx)
+
+		// extract colors from tcell style
+		fg, _, _ := g.textStyle.Decompose()
+
+		fmt.Print("\x1b[48;5;234m") // dark gray background
+		if fg == tcell.ColorLightGreen || fg == tcell.ColorGreen {
+			fmt.Print("\x1b[38;5;46m") // bright green for answers
+		} else {
+			fmt.Print("\x1b[38;5;231m") // bright white for questions
+		}
+
+		// kitty text scaling
+		fmt.Printf("\x1b]66;s=2;%s\x07", textLine)
+
+		fmt.Print("\x1b[0m")
+	}
+
+	fmt.Printf("\x1b[u")
+
+	g.textToRender = ""
 }

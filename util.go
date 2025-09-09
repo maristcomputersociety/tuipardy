@@ -66,13 +66,14 @@ func fillBox(s tcell.Screen, x, y, w, h int, st tcell.Style) {
 
 func trimSpaces(s string) string { return strings.TrimSpace(strings.Join(strings.Fields(s), " ")) }
 
-func drawCenteredWrappedText(s tcell.Screen, x, y, w, h int, st tcell.Style, text string) {
+// wrapText wraps text into lines that fit within the specified maximum width
+func wrapText(text string, maxWidth int) []string {
 	words := strings.Fields(text)
 	lines := []string{}
 	line := ""
 
 	for _, word := range words {
-		if len(line)+len(word)+1 > w-4 {
+		if len(line)+len(word)+1 > maxWidth {
 			if line != "" {
 				lines = append(lines, line)
 				line = word
@@ -92,16 +93,14 @@ func drawCenteredWrappedText(s tcell.Screen, x, y, w, h int, st tcell.Style, tex
 		lines = append(lines, line)
 	}
 
-	startY := y + (h-len(lines)*2)/2
-	if startY < y {
-		startY = y
-	}
+	return lines
+}
 
-	for i, textLine := range lines {
-		lineY := startY + i*2
-		if lineY >= y+h {
-			break
+// clearTextArea clears a rectangular area of the screen to prevent text overlapping
+func clearTextArea(s tcell.Screen, x, y, w, h int, bgStyle tcell.Style) {
+	for j := 0; j < h; j++ {
+		for i := 0; i < w; i++ {
+			s.SetContent(x+i, y+j, ' ', nil, bgStyle)
 		}
-		drawCenteredText(s, x, lineY, w, 1, st, textLine)
 	}
 }

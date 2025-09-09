@@ -34,13 +34,13 @@ func (g *Game) handleMouse(ev *tcell.EventMouse) {
 func (g *Game) hitTestCell(x, y int) (c, r int, ok bool) {
 	w, _ := g.s.Size()
 	cols := len(g.board.Categories)
-	colW := max(12, w/cols)
-	if y < 3 || y >= 3+5*7 {
+	colW := max(MinColumnWidth, w/cols)
+	if y < CategoryHeight || y >= CategoryHeight+QuestionsPerCategory*CellHeight {
 		return 0, 0, false
 	}
-	r = (y - 3) / 7
+	r = (y - CategoryHeight) / CellHeight
 	c = x / colW
-	if c < 0 || c >= cols || r < 0 || r >= 5 {
+	if c < 0 || c >= cols || r < 0 || r >= QuestionsPerCategory {
 		return 0, 0, false
 	}
 	return c, r, true
