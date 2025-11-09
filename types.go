@@ -48,6 +48,6 @@ const (
 const (
 	MinTeams             = 2
 	MaxTeams             = 8
-	QuestionsPerCategory = 5
+	QuestionsPerCategory = 3
 	ExpectedCategories   = 6
 )
