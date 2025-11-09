@@ -61,12 +61,16 @@ func LoadBoard(path string) (*Board, error) {
 		return nil, fmt.Errorf("expected %d categories, got %d", ExpectedCategories, len(byCat))
 	}
 
+	// Ensure each category has the expected number of questions to avoid runtime panics.
+	for cat, qs := range byCat {
+		if len(qs) != QuestionsPerCategory {
+			return nil, fmt.Errorf("category %q has %d questions, expected %d", cat, len(qs), QuestionsPerCategory)
+		}
+	}
+
 	cats := make([]*Category, 0, ExpectedCategories)
 	for cat, qs := range byCat {
 		sort.Slice(qs, func(i, j int) bool { return qs[i].Value < qs[j].Value })
-		if len(qs) != QuestionsPerCategory {
-			return nil, fmt.Errorf("category %q has %d questions; expected %d", cat, len(qs), QuestionsPerCategory)
-		}
 		cats = append(cats, &Category{Name: cat, Questions: qs})
 	}
 
